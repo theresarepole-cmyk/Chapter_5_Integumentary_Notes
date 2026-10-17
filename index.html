@@ -616,19 +616,66 @@ let printingNow=false;
 async function printCompletedNotes(){
  if(printingNow)return;
  printingNow=true;
- const btn=document.getElementById('print');
- btn.disabled=true;btn.textContent='Preparing pictures…';
+ const btn=document.getElementById('print'), oldLabel=btn.textContent;
+ btn.disabled=true;btn.textContent='Preparing printable notes…';
  try{
-  sections.forEach(s=>s.classList.add('active'));
+  // Make a completely separate, unstyled print document. The live site's
+  // hidden sections and legacy print CSS never enter this document.
   await preparePrintDiagrams();
-  queryAll('textarea.response,.extra-notes textarea').forEach(fit);
-  btn.textContent='Opening PDF / Print…';
-  window.print();
+  const source=document.getElementById('notes');
+  const printable=source.cloneNode(true);
+  printable.querySelectorAll('section.section-panel').forEach(el=>{
+   el.classList.add('active');el.style.display='block';
+  });
+  printable.querySelectorAll('.drawing-stage').forEach(stage=>{
+   const combined=stage.querySelector('img.print-composite');
+   const original=stage.querySelector('img:not(.print-composite)');
+   const photo=combined&&combined.src?combined:original;
+   if(photo){
+    const image=document.createElement('img');
+    image.src=photo.src;image.alt=photo.alt||'Anatomical diagram';
+    image.className='printed-diagram';
+    stage.replaceChildren(image);
+   }else stage.replaceChildren();
+  });
+  printable.querySelectorAll('.diagram-bar,.diagram-tools,.diagram-hint,button,canvas').forEach(el=>el.remove());
+  const originals=[...source.querySelectorAll('input,textarea')];
+  const copies=[...printable.querySelectorAll('input,textarea')];
+  copies.forEach((el,i)=>{
+    const from=originals[i],value=from?.value||'';
+    const replacement=document.createElement(el.tagName==='TEXTAREA'?'div':'span');
+    replacement.className=el.tagName==='TEXTAREA'?'printed-answer':'printed-blank';
+    replacement.textContent=value|| (el.tagName==='INPUT'?'________________':'');
+    el.replaceWith(replacement);
+  });
+  // Image files are embedded in the isolated document to avoid print
+  // previews losing lazy-loaded or canvas-backed pictures.
+  const student=document.querySelector('[data-key="student-name"]')?.value||'';
+  const date=document.querySelector('[data-key="date"]')?.value||'';
+  const head=document.createElement('div');head.className='student-print-header';
+  head.textContent=[student,date].filter(Boolean).join('  ·  ');
+  printable.prepend(head);
+  const css='@page{size:letter;margin:.5in}*{box-sizing:border-box}html,body{margin:0;padding:0}body{font:11pt/1.4 Cambria,Georgia,serif;color:#111;background:#fff}#notes{margin:0;padding:0}#notes>section{display:block!important;margin:0!important;padding:0!important;break-before:auto!important;page-break-before:auto!important}#notes>section:first-child p:first-child{margin:0 0 5pt}h2{font-size:15pt;margin:12pt 0 5pt;color:#143b59;border-bottom:1px solid #ccd}h3{font-size:12pt;margin:10pt 0 4pt}p{margin:5pt 0}li{margin:3pt 0}table{border-collapse:collapse;width:100%;margin:6pt 0}td,th{border:1px solid #bbb;padding:5pt}.printed-blank{font-weight:bold;border-bottom:1px solid #555;white-space:pre-wrap}.printed-answer{white-space:pre-wrap;min-height:22pt;border:1px solid #ccc;padding:6pt;margin:5pt 0 10pt}.drawing-stage{display:block;position:static;width:100%;height:auto;overflow:visible}.printed-diagram{display:block;position:static!important;width:auto;max-width:100%;height:auto;max-height:8in;object-fit:contain;break-inside:avoid}.diagram{display:block;margin:8pt 0 12pt;break-inside:avoid}.extra-notes{padding:7pt;border:1px solid #ddd;margin:10pt 0}.student-print-header{font-size:10pt;margin-bottom:4pt}mark{background:#fff2a6;color:inherit}';
+  const iframe=document.createElement('iframe');
+  iframe.setAttribute('title','Chapter 5 printable notes');
+  iframe.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+  document.body.appendChild(iframe);
+  const doc=iframe.contentDocument;
+  doc.open();doc.write('<!doctype html><html><head><meta charset="utf-8"><title>Chapter 5 – Integumentary Guided Notes</title><style>'+css+'</style></head><body></body></html>');doc.close();
+  printable.id='notes';
+  doc.body.appendChild(doc.importNode(printable,true));
+  await Promise.all([...doc.images].map(im=>im.complete?Promise.resolve():new Promise(res=>{im.onload=res;im.onerror=res;setTimeout(res,5000)})));
+  btn.textContent='Opening print preview…';
+  iframe.contentWindow.focus();
+  iframe.contentWindow.print();
+  setTimeout(()=>iframe.remove(),60000);
+ }catch(error){
+  console.error('PDF print preparation failed',error);
+  alert('Unable to prepare the PDF. Please try again after the pictures finish loading.');
  }finally{
-  btn.disabled=false;btn.textContent='Print / Save PDF';printingNow=false;
+  btn.disabled=false;btn.textContent=oldLabel;printingNow=false;
  }
 }
-
 function init(){makeSections();diagrams.forEach(setupDiagram);let saved=null;try{saved=JSON.parse(localStorage.getItem(STORE)||localStorage.getItem(OLD)||'null')}catch(e){}if(saved)restore(saved);setupHighlights();allFields.forEach(e=>e.addEventListener('input',()=>{fit(e);progress();queue()}));$('#ink').oninput=e=>ink=e.target.value;$('#width').onchange=e=>penWidth=Number(e.target.value);$('#download').onclick=download;$('#upload').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{const o=JSON.parse(await file.text());if(![1,2].includes(o.version)||!o.fields)throw Error('bad format');if(confirm('Replace all current answers and annotations with this backup?')){restore(o);persist();location.reload()}}catch(x){alert('This file is not a valid Chapter 5 backup.')}e.target.value=''};$('#clear').onclick=()=>{if(confirm('Erase ALL answers and annotations? Export your backup first.')){localStorage.removeItem(STORE);localStorage.removeItem(OLD);location.reload()}};$('#google-doc').onclick=saveGoogleDoc;$('#print').onclick=printCompletedNotes;window.addEventListener('beforeprint',()=>sections.forEach(s=>s.classList.add('active')));window.addEventListener('afterprint',syncSidebar);window.addEventListener('resize',()=>diagrams.forEach(resize));saveStatus(saved?'✓ Restored saved work':'Auto-save ready',!!saved);progress()}
 document.addEventListener('DOMContentLoaded',init);
 
